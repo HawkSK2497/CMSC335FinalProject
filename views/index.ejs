@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="/styles/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <title>Movie Favorites List</title>
+</head>
+<body>
+    <div id="movie-header">
+        <h1>Enter Title of Movie/TV</h1>
+        <form method="post" action="/title">
+            <input type="text" id="title" name="title">
+            <input type="submit" id="get-title" value="GET TITLE">
+        </form>
+    </div>
+
+    <% if (locals.content) { %>
+    <div id="movies">
+        <div class="movie-card">
+            <img src="<%= content.Poster %>" alt="<%= content.Title %>">
+            <h2><%= content.Title %></h2>
+            <div class="movie-card-specs">
+                <h3><%= content.Year %></h3>
+                <h3><%= content.Runtime %></h3>
+                <h3><%= content.Rated %></h3>
+            </div>
+            <div class="movie-card-ratings">
+                <h4>⭐<%= content.imdbRating %> (<%= content.imdbVotes %>)</h4>
+                <button class="rate" name="<%= content.Title %>">RATE</button>
+            </div>
+            <p><%= content.Plot %></p>
+            <form method="post" action="/add" style="width: 100%;">
+                <input type="hidden" name="title" value="<%= content.Title %>">
+                <button type="submit" class="movie-card-btn">ADD TO LIST</button>
+            </form>
+        </div> 
+        
+        <div id="recentandrecs">
+            <% if (locals.recommendations && recommendations.length > 0) { %>
+            <div class="recommendations-searches"> 
+                <h2>RECOMMENDATIONS FOR YOU:</h2>
+                <div class="recommendations-grid"> 
+                    <% recommendations.slice(0, 4).forEach(elem => { %>
+                    <div class="movie-card">
+                        <img src="<%= elem.Poster %>" alt="<%= elem.Title %>">
+                        <h2><%= elem.Title %></h2>
+                        <div class="movie-card-specs">
+                            <h3><%= elem.Year %></h3>
+                            <h3><%= elem.Runtime %></h3>
+                        </div>
+                        <div class="movie-card-ratings">
+                            <h4>⭐<%= elem.imdbRating %></h4>
+                            <button class="rate" name="<%= elem.Title %>">RATE</button>
+                        </div>
+                    </div>
+                    <% }) %>
+                </div>
+            </div>
+            <% } %>
+  
+
+            <% if (locals.recents && recents.length > 0) { %>
+            <div id="recent-searches">
+                <h2>RECENT SEARCHES:</h2>
+                <div id="recent-grid">
+                    <% recents.slice(0, 4).forEach(elem => { %>
+                    <div class="movie-card">
+                        <form method="post" action="/delete" class="delete-btn-form">
+                            <input type="hidden" name="title" value="<%= elem.Title %>">
+                            <button type="submit" class="delete-btn">✕</button>
+                        </form>
+                        <img src="<%= elem.Poster %>" alt="<%= elem.Title %>">
+                        <h2><%= elem.Title %></h2>
+                        <div class="movie-card-specs">
+                            <h3><%= elem.Year %></h3>
+                            <h3><%= elem.Runtime %></h3>
+                        </div>
+                        <div class="movie-card-ratings">
+                            <h4>⭐<%= elem.imdbRating %></h4>
+                            <button class="rate" name="<%= elem.Title %>">RATE</button>
+                        </div>
+                    </div>
+                    <% }) %> 
+                </div>
+            </div>
+            <% } %>
+        </div>  
+            
+    </div>
+
+    <% if (locals.favorites && favorites.length > 0) { %>
+    <div id="favorites-bar">
+        <h2>YOUR RATINGS:</h2>
+        <div id="favorites-grid">
+            <% favorites.slice(0,6).forEach(elem => { %>
+            <div class="movie-card favorite-item">
+                 <form method="post" action="/delete-fav" class="delete-btn-form">
+                    <input type="hidden" name="title" value="<%= elem.data.Title %>">
+                    <button type="submit" class="delete-btn">✕</button>
+                </form>
+                <img src="<%= elem.data.Poster %>" alt="<%= elem.data.Title %>">
+                <h2><%= elem.data.Title %></h2>
+                <div class="movie-card-specs">
+                    <h3><%= elem.data.Year %></h3>
+                    <h3><%= elem.data.Runtime %></h3>
+                </div>
+                <div class="movie-card-ratings">
+                    <% if (elem.rating !== null) { %>
+                        <h4>Your Rating: ⭐<%= elem.rating %></h4>
+                    <% } %>
+                    <button class="rate" name="<%= elem.data.Title %>">RATE</button>
+                </div>
+            </div>
+            <% }) %>
+        </div>
+    </div>
+    <% } %>
+
+    <% } else if (locals.error) { %>
+        <p id="error-msg"><%= error %></p>
+    <% } %>
+</body>
+<script>
+    document.querySelectorAll(".rate").forEach((elem) => 
+    elem.addEventListener("click", async () => {
+        const title = elem.name;
+        const rating = prompt("Rate Title from 1.0 to 10.0: ");
+        if (rating === null) {
+            return;
+        }
+        const ratingNum = Number(rating);
+        if (isNaN(rating) || rating < 1 || rating > 10) {
+            alert("Please enter a number between 1 and 10.");
+            return;
+        }
+        try {
+            const res = await axios.post("/rate", {title, rating});
+            if (res.status === 200) {
+                window.location.reload();
+            }
+        } catch (err) {
+            console.error(err);
+            alert("Failed to save rating.");
+        }
+    }));
+</script>
+</html>
