@@ -1,7 +1,7 @@
 import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
-import pg from "pg";
+import mongoose from "mongoose";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 dotenv.config({ quiet: true });
 
@@ -10,22 +10,24 @@ const genAI = new GoogleGenerativeAI(process.env.GEMINI_APIKEY);
 const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite" });
 const port = 3000;
 
-const db = new pg.Client({
-  connectionString: process.env.POSTGRES_CONNECTION_STRING,
-  ssl: {
-    rejectUnauthorized: false,
-  },
+const titleHistorySchema = new mongoose.Schema({
+  title: String,
+  data: mongoose.Schema.Types.Mixed,
+  recommendations: mongoose.Schema.Types.Mixed,
 });
+
+const favoritesSchema = new mongoose.Schema({
+  title: String,
+  rating: Number,
+  data: mongoose.Schema.Types.Mixed,
+});
+
+const TitleHistory = mongoose.model("TitleHistory", titleHistorySchema);
+const Favorites = mongoose.model("Favorites", favoritesSchema);
 
 async function startApp() {
   try {
-    await db.connect();
-    await db.query(
-      "CREATE TABLE IF NOT EXISTS title_history (id SERIAL PRIMARY KEY, title VARCHAR(255), data JSONB, recommendations JSONB)",
-    );
-    await db.query(
-      "CREATE TABLE IF NOT EXISTS favorites (id SERIAL PRIMARY KEY, title VARCHAR(255), rating DECIMAL(4,2), data JSONB)",
-    );
+    await mongoose.connect(process.env.MONGODB_URI);
     app.listen(port, () => {
       console.log(`Server is listening on port ${port}`);
     });
@@ -34,14 +36,6 @@ async function startApp() {
     process.exit(1);
   }
 }
-
-// const db = new pg.Client({
-//   user: process.env.POSTGRES_USER,
-//   host: process.env.POSTGRES_HOST,
-//   database: process.env.POSTGRES_DATABASE,
-//   password: process.env.POSTGRES_PASSWORD,
-//   port: process.env.POSTGRES_PORT,
-// });
 
 const url = `http://www.omdbapi.com/?apikey=${process.env.OMDB_APIKEY}&t=`;
 app.use(express.static("public"));
@@ -55,15 +49,11 @@ app.get("/", async (req, res) => {
   let recommendations = [];
   let favorites = [];
   try {
-    const dbResult = await db.query(
-      "SELECT * FROM title_history ORDER BY id DESC",
-    );
-    const favoritesResult = await db.query(
-      "SELECT * FROM favorites ORDER BY id DESC NULLS LAST",
-    );
-    recents = dbResult.rows.map((row) => row.data);
-    recommendations = dbResult.rows[0].recommendations || [];
-    favorites = favoritesResult.rows;
+    const dbResult = await TitleHistory.find().sort({ _id: -1 });
+    const favoritesResult = await Favorites.find().sort({ _id: -1 });
+    recents = dbResult.map((doc) => doc.data);
+    recommendations = dbResult[0]?.recommendations || [];
+    favorites = favoritesResult;
   } catch (err) {
     //console.error("Error executing query", err.stack);
   }
@@ -110,29 +100,25 @@ app.post("/title", async (req, res) => {
     }
 
     const movie = result.data;
-    const prompt = `The user is looking at the movie "${movie.Title}" (${movie.Year}). 
+    const prompt = `The user is looking at the movie "${movie.Title}" (${movie.Year}).
     Genre: ${movie.Genre}. Plot: ${movie.Plot}.
-    Suggest 4 similar movies or TV shows. 
-    Return ONLY a JSON array of strings containing just the titles. 
+    Suggest 4 similar movies or TV shows.
+    Return ONLY a JSON array of strings containing just the titles.
     Example format: ["Title 1", "Title 2", "Title 3", "Title 4"]`;
     const aiResult = await model.generateContent(prompt);
     const responseText = aiResult.response.text();
     const recommendedTitles = JSON.parse(
       responseText.replace(/```json|```/g, ""),
     );
-    const dbResult = await db.query(
-      "SELECT * FROM title_history where title = $1",
-      [result.data.Title],
-    );
-    if (dbResult.rowCount !== 0) {
-      await db.query("DELETE FROM title_history WHERE title = $1", [
-        result.data.Title,
-      ]);
+    const existing = await TitleHistory.findOne({ title: result.data.Title });
+    if (existing) {
+      await TitleHistory.deleteOne({ title: result.data.Title });
     }
-    await db.query(
-      "INSERT INTO title_history (title, data, recommendations) VALUES ($1, $2, $3)",
-      [result.data.Title, result.data, JSON.stringify(recommendedTitles)],
-    );
+    await new TitleHistory({
+      title: result.data.Title,
+      data: result.data,
+      recommendations: recommendedTitles,
+    }).save();
     res.redirect("/");
   } catch (err) {
     console.error("Route Error:", err.stack);
@@ -142,9 +128,7 @@ app.post("/title", async (req, res) => {
 
 app.post("/delete", async (req, res) => {
   try {
-    await db.query("DELETE FROM title_history WHERE title = $1", [
-      req.body.title,
-    ]);
+    await TitleHistory.deleteOne({ title: req.body.title });
   } catch (err) {
     console.error("Error deleting title", err.stack);
   }
@@ -156,17 +140,14 @@ app.post("/add", async (req, res) => {
   try {
     const result = await axios.get(url + movieTitle);
     const movie = result.data;
-    const dbResult = await db.query(
-      "SELECT * FROM favorites where title = $1",
-      [movie.Title],
-    );
-    if (dbResult.rowCount !== 0) {
-      await db.query("DELETE FROM favorites WHERE title = $1", [movie.Title]);
+    const existing = await Favorites.findOne({ title: movie.Title });
+    if (existing) {
+      await Favorites.deleteOne({ title: movie.Title });
     }
-    await db.query("INSERT INTO favorites (title, data) VALUES ($1, $2)", [
-      result.data.Title,
-      result.data,
-    ]);
+    await new Favorites({
+      title: result.data.Title,
+      data: result.data,
+    }).save();
     res.redirect("/");
   } catch (err) {
     console.error("Route Error:", err.stack);
@@ -180,20 +161,15 @@ app.post("/rate", async (req, res) => {
   try {
     const result = await axios.get(url + movieTitle);
     const movie = result.data;
-    const dbResult = await db.query(
-      "SELECT * FROM favorites where title = $1",
-      [movie.Title],
-    );
-    if (dbResult.rowCount === 0) {
-      await db.query(
-        "INSERT INTO favorites (title, rating, data) VALUES ($1, $2, $3)",
-        [movie.Title, rating, movie],
-      );
+    const existing = await Favorites.findOne({ title: movie.Title });
+    if (!existing) {
+      await new Favorites({
+        title: movie.Title,
+        rating: rating,
+        data: movie,
+      }).save();
     } else {
-      await db.query("UPDATE favorites SET rating = $1 WHERE title = $2", [
-        rating,
-        movie.Title,
-      ]);
+      await Favorites.updateOne({ title: movie.Title }, { rating: rating });
     }
     res.sendStatus(200);
   } catch (err) {
@@ -204,7 +180,7 @@ app.post("/rate", async (req, res) => {
 
 app.post("/delete-fav", async (req, res) => {
   try {
-    await db.query("DELETE FROM favorites WHERE title = $1", [req.body.title]);
+    await Favorites.deleteOne({ title: req.body.title });
   } catch (err) {
     console.error("Error deleting title", err.stack);
   }
